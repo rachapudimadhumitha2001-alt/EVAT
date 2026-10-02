@@ -33,5 +33,24 @@ pipeline {
                 }
             }
         }
+
+        stage('Security') {
+            steps {
+                echo 'Running npm dependency security audit...'
+
+                bat 'npm.cmd audit --json > npm-audit-report.json || exit /b 0'
+
+                echo 'Checking for critical vulnerabilities...'
+
+                bat 'npm.cmd audit --audit-level=critical'
+            }
+
+            post {
+                always {
+                    archiveArtifacts artifacts: 'npm-audit-report.json',
+                                     allowEmptyArchive: true
+                }
+            }
+        }
     }
 }
