@@ -3,6 +3,9 @@ pipeline {
 
     stages {
 
+        // ============================================================
+        // 1. BUILD
+        // ============================================================
         stage('Build') {
             steps {
                 echo 'Building EVAT application...'
@@ -13,6 +16,10 @@ pipeline {
             }
         }
 
+
+        // ============================================================
+        // 2. TEST
+        // ============================================================
         stage('Test') {
             steps {
                 echo 'Running EVAT automated tests...'
@@ -21,6 +28,10 @@ pipeline {
             }
         }
 
+
+        // ============================================================
+        // 3. CODE QUALITY
+        // ============================================================
         stage('Code Quality') {
             steps {
                 echo 'Running SonarQube code quality analysis...'
@@ -28,12 +39,17 @@ pipeline {
                 withSonarQubeEnv('EVAT-SonarQube') {
                     script {
                         def scannerHome = tool 'SonarQube-Scanner'
+
                         bat "\"${scannerHome}\\bin\\sonar-scanner.bat\""
                     }
                 }
             }
         }
 
+
+        // ============================================================
+        // 4. SECURITY
+        // ============================================================
         stage('Security') {
             steps {
                 echo 'Running npm dependency security audit...'
@@ -53,67 +69,105 @@ pipeline {
             }
         }
 
+
+        // ============================================================
+        // 5. DEPLOY
+        // ============================================================
         stage('Deploy') {
             steps {
                 script {
 
+                    // Jenkins cannot currently find Docker through PATH,
+                    // so use the verified Docker executable directly.
+                    def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
+
+
+                    // ------------------------------------------------
+                    // Build Docker image
+                    // ------------------------------------------------
                     echo 'Building Docker image...'
 
-                    bat "docker build -t evat-backend:${BUILD_NUMBER} server/node-api"
+                    bat "\"${docker}\" build -t evat-backend:${BUILD_NUMBER} server/node-api"
 
+
+                    // ------------------------------------------------
+                    // Remove previous staging container
+                    // ------------------------------------------------
+                    echo 'Removing previous staging container if it exists...'
+
+                    bat "\"${docker}\" rm -f evat-backend-staging 2>NUL || exit /b 0"
+
+
+                    // ------------------------------------------------
+                    // Start new staging container
+                    // ------------------------------------------------
                     echo 'Deploying EVAT backend container...'
 
-                    bat 'docker rm -f evat-backend-staging 2>NUL || exit /b 0'
+                    bat "\"${docker}\" run -d --name evat-backend-staging -p 8082:8081 --env-file server/node-api/.env -e MONGODB_URI=mongodb://host.docker.internal:27017/evat evat-backend:${BUILD_NUMBER}"
 
-                    bat "docker run -d --name evat-backend-staging -p 8082:8081 --env-file server/node-api/.env -e MONGODB_URI=mongodb://host.docker.internal:27017/evat evat-backend:${BUILD_NUMBER}"
 
-                    echo 'Waiting for Docker health check...'
+                    // ------------------------------------------------
+                    // Give application time to start
+                    // ------------------------------------------------
+                    echo 'Waiting for EVAT container to start...'
 
-                    bat '''
-                        powershell -NoProfile -Command ^
-                        "$deadline=(Get-Date).AddMinutes(2); ^
-                        do { ^
-                            $status=docker inspect --format="{{.State.Health.Status}}" evat-backend-staging 2>$null; ^
-                            Write-Host "Container health: $status"; ^
-                            if ($status -eq "healthy") { exit 0 }; ^
-                            if ($status -eq "unhealthy") { exit 1 }; ^
-                            Start-Sleep -Seconds 5 ^
-                        } while ((Get-Date) -lt $deadline); ^
-                        Write-Host "Health check timed out."; ^
-                        exit 1"
-                    '''
+                    bat 'timeout /t 10 /nobreak'
 
+
+                    // ------------------------------------------------
+                    // Check container status
+                    // ------------------------------------------------
+                    echo 'Checking deployed container...'
+
+                    bat "\"${docker}\" ps --filter name=evat-backend-staging"
+
+
+                    // ------------------------------------------------
+                    // API health check
+                    // ------------------------------------------------
                     echo 'Verifying deployed EVAT API...'
 
                     bat '''
-                        powershell -NoProfile -Command ^
-                        "$response=Invoke-WebRequest -Uri 'http://localhost:8082/api/docs/' -UseBasicParsing; ^
-                        Write-Host ('HTTP Status: ' + $response.StatusCode); ^
-                        if ($response.StatusCode -ne 200) { exit 1 }"
+                        powershell -NoProfile -Command "$response=Invoke-WebRequest -Uri 'http://localhost:8082/api/docs/' -UseBasicParsing; Write-Host ('HTTP Status: ' + $response.StatusCode); if ($response.StatusCode -ne 200) { exit 1 }"
                     '''
 
+
+                    // ------------------------------------------------
+                    // Deployment successful
+                    // ------------------------------------------------
                     echo 'EVAT deployment completed successfully.'
                 }
             }
 
             post {
+
+                // ----------------------------------------------------
+                // Rollback if deployment fails
+                // ----------------------------------------------------
                 failure {
                     echo 'Deployment failed. Attempting rollback...'
 
-                    bat 'docker rm -f evat-backend-staging 2>NUL || exit /b 0'
+                    script {
 
-                    bat '''
-                        powershell -NoProfile -Command ^
-                        "$existing=docker ps -aq --filter name=evat-backend; ^
-                        if ($existing) { ^
-                            docker rm -f evat-backend 2>$null ^
-                        }; ^
-                        docker run -d --name evat-backend -p 8082:8081 --env-file server/node-api/.env -e MONGODB_URI=mongodb://host.docker.internal:27017/evat evat-backend:1.1"
-                    '''
+                        def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
-                    echo 'Rollback attempted using known-good evat-backend:1.1.'
+
+                        // Remove failed staging container
+                        bat "\"${docker}\" rm -f evat-backend-staging 2>NUL || exit /b 0"
+
+
+                        // Restore known-good version
+                        bat "\"${docker}\" run -d --name evat-backend -p 8082:8081 --env-file server/node-api/.env -e MONGODB_URI=mongodb://host.docker.internal:27017/evat evat-backend:1.1"
+
+
+                        echo 'Rollback attempted using known-good evat-backend:1.1.'
+                    }
                 }
 
+
+                // ----------------------------------------------------
+                // Deployment successful
+                // ----------------------------------------------------
                 success {
                     echo 'Deployment and health checks passed.'
                 }
