@@ -26,8 +26,10 @@ pipeline {
                 echo 'Running SonarQube code quality analysis...'
 
                 withSonarQubeEnv('EVAT-SonarQube') {
-                    def scannerHome = tool 'SonarQube-Scanner'
-                    bat "\"${scannerHome}\\bin\\sonar-scanner.bat\""
+                    script {
+                        def scannerHome = tool 'SonarQube-Scanner'
+                        bat "\"${scannerHome}\\bin\\sonar-scanner.bat\""
+                    }
                 }
             }
         }
