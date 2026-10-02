@@ -14,7 +14,7 @@ export default defineConfig(({command}) => {
   if (command === "serve") {
     scriptSrcPolicy = "'self' 'unsafe-inline' https://maps.googleapis.com";
     styleSrcPolicy = "'self' 'unsafe-inline' https://unpkg.com";
-    connectSrcPolicy = "'self' ws://localhost:3000 ws://127.0.0.1:3000 http://localhost:3000 http://localhost:8080 https://maps.googleapis.com";
+    connectSrcPolicy = "'self' ws://localhost:3000 ws://127.0.0.1:3000 http://localhost:3000 http://localhost:8080 http://localhost:8081 https://maps.googleapis.com";
   }
 
 
