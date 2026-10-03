@@ -74,57 +74,63 @@ pipeline {
         // 5. DEPLOY
         // ============================================================
         stage('Deploy') {
+
+            environment {
+                EVAT_JWT_SECRET = credentials('evat-jwt-secret')
+            }
+
             steps {
                 script {
 
-                    // Jenkins cannot currently find Docker through PATH,
-                    // so use the verified Docker executable directly.
                     def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
-
-                    // ------------------------------------------------
-                    // Build Docker image
-                    // ------------------------------------------------
                     echo 'Building Docker image...'
 
                     bat "\"${docker}\" build -t evat-backend:${BUILD_NUMBER} server/node-api"
 
 
-                    // ------------------------------------------------
-                    // Remove previous staging container
-                    // ------------------------------------------------
                     echo 'Removing previous staging container if it exists...'
 
                     bat "\"${docker}\" rm -f evat-backend-staging 2>NUL || exit /b 0"
 
 
-                    // ------------------------------------------------
-                    // Start new staging container
-                    // ------------------------------------------------
                     echo 'Deploying EVAT backend container...'
 
-                    bat "\"${docker}\" run -d --name evat-backend-staging -p 8082:8081 --env-file server/node-api/.env -e MONGODB_URI=mongodb://host.docker.internal:27017/evat evat-backend:${BUILD_NUMBER}"
+                    bat """
+                        "${docker}" run -d ^
+                        --name evat-backend-staging ^
+                        -p 8082:8081 ^
+                        -e "DOMAIN_URL=" ^
+                        -e "CLIENT_ORIGIN=http://localhost:3000" ^
+                        -e "COOKIE_SAME_SITE=lax" ^
+                        -e "MONGODB_URI=mongodb://host.docker.internal:27017/evat" ^
+                        -e "JWT_SECRET=%EVAT_JWT_SECRET%" ^
+                        -e "PORT=8081" ^
+                        -e "PYTHON_API_URL=http://host.docker.internal:5000" ^
+                        -e "COST_API_URL=" ^
+                        -e "DEMAND_API_URL=" ^
+                        -e "RELIABILITY_API_URL=http://host.docker.internal:8003" ^
+                        evat-backend:${BUILD_NUMBER}
+                    """
 
 
-                    // ------------------------------------------------
-                    // Give application time to start
-                    // ------------------------------------------------
-                    echo 'Waiting for EVAT container to start...'
+                    echo 'Waiting for Docker health check...'
 
                     bat 'timeout /t 10 /nobreak'
 
 
-                    // ------------------------------------------------
-                    // Check container status
-                    // ------------------------------------------------
                     echo 'Checking deployed container...'
 
                     bat "\"${docker}\" ps --filter name=evat-backend-staging"
 
 
-                    // ------------------------------------------------
-                    // API health check
-                    // ------------------------------------------------
+                    echo 'Checking Docker container health...'
+
+                    bat """
+                        powershell -NoProfile -Command "\$health=(docker inspect --format='{{.State.Health.Status}}' evat-backend-staging); Write-Host ('Docker Health: ' + \$health); if (\$health -eq 'unhealthy') { exit 1 }"
+                    """
+
+
                     echo 'Verifying deployed EVAT API...'
 
                     bat '''
@@ -132,19 +138,17 @@ pipeline {
                     '''
 
 
-                    // ------------------------------------------------
-                    // Deployment successful
-                    // ------------------------------------------------
                     echo 'EVAT deployment completed successfully.'
                 }
             }
 
             post {
 
-                // ----------------------------------------------------
-                // Rollback if deployment fails
-                // ----------------------------------------------------
+                // --------------------------------------------------------
+                // Rollback
+                // --------------------------------------------------------
                 failure {
+
                     echo 'Deployment failed. Attempting rollback...'
 
                     script {
@@ -152,12 +156,25 @@ pipeline {
                         def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
 
-                        // Remove failed staging container
+                        echo 'Removing failed staging container...'
+
                         bat "\"${docker}\" rm -f evat-backend-staging 2>NUL || exit /b 0"
 
 
-                        // Restore known-good version
-                        bat "\"${docker}\" run -d --name evat-backend -p 8082:8081 --env-file server/node-api/.env -e MONGODB_URI=mongodb://host.docker.internal:27017/evat evat-backend:1.1"
+                        echo 'Starting rollback using known-good image evat-backend:1.1...'
+
+                        bat """
+                            "${docker}" run -d ^
+                            --name evat-backend ^
+                            -p 8082:8081 ^
+                            -e "DOMAIN_URL=" ^
+                            -e "CLIENT_ORIGIN=http://localhost:3000" ^
+                            -e "COOKIE_SAME_SITE=lax" ^
+                            -e "MONGODB_URI=mongodb://host.docker.internal:27017/evat" ^
+                            -e "JWT_SECRET=%EVAT_JWT_SECRET%" ^
+                            -e "PORT=8081" ^
+                            evat-backend:1.1
+                        """
 
 
                         echo 'Rollback attempted using known-good evat-backend:1.1.'
@@ -165,10 +182,11 @@ pipeline {
                 }
 
 
-                // ----------------------------------------------------
-                // Deployment successful
-                // ----------------------------------------------------
+                // --------------------------------------------------------
+                // Successful deployment
+                // --------------------------------------------------------
                 success {
+
                     echo 'Deployment and health checks passed.'
                 }
             }
