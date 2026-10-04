@@ -22,7 +22,6 @@ pipeline {
             }
         }
 
-
         // =========================================================
         // 2. TEST
         // =========================================================
@@ -35,7 +34,6 @@ pipeline {
                 echo 'Test stage completed successfully.'
             }
         }
-
 
         // =========================================================
         // 3. CODE QUALITY
@@ -56,7 +54,6 @@ pipeline {
             }
         }
 
-
         // =========================================================
         // 4. SECURITY
         // =========================================================
@@ -64,17 +61,10 @@ pipeline {
             steps {
                 echo 'Running npm dependency security audit...'
 
-                /*
-                 * Generate JSON security report.
-                 * The report is archived after the stage.
-                 */
                 bat 'npm.cmd audit --json > npm-audit-report.json || exit /b 0'
 
                 echo 'Checking for critical vulnerabilities...'
 
-                /*
-                 * Critical vulnerabilities fail the pipeline.
-                 */
                 bat 'npm.cmd audit --audit-level=critical'
 
                 echo 'Security stage completed successfully.'
@@ -90,7 +80,6 @@ pipeline {
             }
         }
 
-
         // =========================================================
         // 5. DEPLOY
         // =========================================================
@@ -101,42 +90,18 @@ pipeline {
             }
 
             steps {
-
                 script {
 
-                    /*
-                     * Jenkins does not always inherit Docker Desktop's
-                     * PATH when running as a Windows service.
-                     *
-                     * Therefore the absolute Docker path is used.
-                     */
                     def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
-
-                    // -------------------------------------------------
-                    // Build Docker image
-                    // -------------------------------------------------
                     echo 'Building EVAT Docker image...'
 
                     bat "\"${docker}\" build -t evat-backend:${BUILD_NUMBER} server/node-api"
 
-
-                    // -------------------------------------------------
-                    // Remove previous staging container
-                    // -------------------------------------------------
                     echo 'Removing previous staging container if it exists...'
 
-                    /*
-                     * Do not use 2>NUL because Jenkins Windows batch
-                     * execution previously produced an input-redirection
-                     * error.
-                     */
                     bat "\"${docker}\" rm -f evat-backend-staging || exit /b 0"
 
-
-                    // -------------------------------------------------
-                    // Deploy staging container
-                    // -------------------------------------------------
                     echo 'Deploying EVAT backend container...'
 
                     bat """
@@ -156,68 +121,43 @@ pipeline {
                         evat-backend:${BUILD_NUMBER}
                     """
 
-
-                    // -------------------------------------------------
-                    // Wait for application startup
-                    // -------------------------------------------------
                     echo 'Waiting for Docker application to start...'
 
                     bat 'powershell -NoProfile -Command "Start-Sleep -Seconds 15"'
 
-
-                    // -------------------------------------------------
-                    // Check deployed container
-                    // -------------------------------------------------
                     echo 'Checking deployed container...'
 
                     bat "\"${docker}\" ps --filter name=evat-backend-staging"
 
-
-                    // -------------------------------------------------
-                    // Check Docker health
-                    // -------------------------------------------------
                     echo 'Checking Docker container health...'
 
                     bat """
                         powershell -NoProfile -Command "\$health=(& '${docker}' inspect --format='{{.State.Health.Status}}' evat-backend-staging); Write-Host ('Docker Health: ' + \$health); if (\$health -eq 'unhealthy') { exit 1 }"
                     """
 
-
-                    // -------------------------------------------------
-                    // Verify API
-                    // -------------------------------------------------
                     echo 'Verifying deployed EVAT API...'
 
                     bat '''
                         powershell -NoProfile -Command "$response=Invoke-WebRequest -Uri 'http://localhost:8082/api/docs/' -UseBasicParsing; Write-Host ('HTTP Status: ' + $response.StatusCode); if ($response.StatusCode -ne 200) { exit 1 }"
                     '''
 
-
                     echo 'EVAT deployment completed successfully.'
                 }
             }
 
-
-            // ---------------------------------------------------------
-            // Deployment post actions
-            // ---------------------------------------------------------
             post {
 
                 success {
-
                     echo '=========================================='
                     echo 'DEPLOYMENT SUCCESSFUL'
                     echo '=========================================='
-
                     echo 'Docker container is running.'
                     echo 'Docker health check passed.'
                     echo 'EVAT API endpoint verification passed.'
                     echo 'Staging deployment completed successfully.'
                 }
 
-
                 failure {
-
                     echo '=========================================='
                     echo 'DEPLOYMENT FAILED'
                     echo 'ATTEMPTING ROLLBACK'
@@ -227,18 +167,10 @@ pipeline {
 
                         def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
-
-                        // -------------------------------------------------
-                        // Remove failed staging container
-                        // -------------------------------------------------
                         echo 'Removing failed staging container...'
 
                         bat "\"${docker}\" rm -f evat-backend-staging || exit /b 0"
 
-
-                        // -------------------------------------------------
-                        // Rollback
-                        // -------------------------------------------------
                         echo 'Starting rollback using known-good image evat-backend:1.1...'
 
                         bat """
@@ -260,81 +192,72 @@ pipeline {
             }
         }
 
-
         // =========================================================
         // 6. RELEASE
         // =========================================================
         stage('Release') {
 
             steps {
-
                 script {
 
                     def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
+                    echo '=========================================='
+                    echo 'CREATING VERSIONED EVAT RELEASE'
+                    echo '=========================================='
 
-                    // -------------------------------------------------
-                    // Create versioned release image
-                    // -------------------------------------------------
-                    echo 'Creating versioned EVAT release...'
-
+                    // Promote the exact Docker image that passed staging.
                     bat "\"${docker}\" tag evat-backend:${BUILD_NUMBER} evat-backend:release-${BUILD_NUMBER}"
-
 
                     echo "Release image created: evat-backend:release-${BUILD_NUMBER}"
 
-
-                    // -------------------------------------------------
-                    // Capture Git commit
-                    // -------------------------------------------------
-                    echo 'Capturing Git commit information...'
-
+                    // Capture Git commit.
                     bat 'git rev-parse HEAD > release-commit.txt'
 
+                    // Create simple release metadata without PowerShell
+                    // here-strings, avoiding Windows batch escaping issues.
+                    bat 'echo EVAT RELEASE METADATA> release-metadata.txt'
+                    bat 'echo Application: EVAT>> release-metadata.txt'
+                    bat 'echo Jenkins Build: %BUILD_NUMBER%>> release-metadata.txt'
+                    bat 'echo Docker Image: evat-backend:release-%BUILD_NUMBER%>> release-metadata.txt'
+                    bat 'echo Git Commit:>> release-metadata.txt'
+                    bat 'type release-commit.txt >> release-metadata.txt'
+                    bat 'echo Release Status: SUCCESS>> release-metadata.txt'
 
-                    // -------------------------------------------------
-                    // Create release metadata
-                    // -------------------------------------------------
-                    echo 'Generating release metadata...'
+                    echo 'Release metadata generated successfully.'
 
-                    bat """
-                        powershell -NoProfile -Command ^
-                        "\$commit=(Get-Content release-commit.txt).Trim(); ^
-                        \$content=@'
-EVAT RELEASE METADATA
-=====================
-Application: EVAT
-Jenkins Build: ${BUILD_NUMBER}
-Docker Image: evat-backend:release-${BUILD_NUMBER}
-Git Commit: \$commit
-Release Status: SUCCESS
-'@; ^
-                        Set-Content -Path release-metadata.txt -Value \$content"
-                    """
+                    echo 'Release image verification...'
 
+                    bat "\"${docker}\" image inspect evat-backend:release-${BUILD_NUMBER}"
 
-                    echo 'EVAT release metadata generated successfully.'
+                    echo '=========================================='
+                    echo "RELEASE SUCCESSFUL: evat-backend:release-${BUILD_NUMBER}"
+                    echo '=========================================='
                 }
             }
 
-
-            // ---------------------------------------------------------
-            // Release post actions
-            // ---------------------------------------------------------
             post {
-
                 success {
 
-                    echo '=========================================='
-                    echo 'RELEASE SUCCESSFUL'
-                    echo '=========================================='
+                    echo 'Archiving release metadata...'
 
-                    echo "Release image: evat-backend:release-${BUILD_NUMBER}"
-
-                    archiveArtifacts artifacts: 'release-metadata.txt',
+                    archiveArtifacts artifacts: 'release-metadata.txt,release-commit.txt',
                                      allowEmptyArchive: false
+
+                    echo 'Versioned release artefact archived successfully.'
+                }
+
+                failure {
+                    echo '=========================================='
+                    echo 'RELEASE FAILED'
+                    echo '=========================================='
                 }
             }
         }
+
+        // =========================================================
+        // 7. MONITORING
+        // =========================================================
+        // Monitoring will be added after Release is verified.
     }
 }
