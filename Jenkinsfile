@@ -22,6 +22,7 @@ pipeline {
             }
         }
 
+
         // =========================================================
         // 2. TEST
         // =========================================================
@@ -34,6 +35,7 @@ pipeline {
                 echo 'Test stage completed successfully.'
             }
         }
+
 
         // =========================================================
         // 3. CODE QUALITY
@@ -53,6 +55,7 @@ pipeline {
                 echo 'Code quality analysis completed successfully.'
             }
         }
+
 
         // =========================================================
         // 4. SECURITY
@@ -80,6 +83,7 @@ pipeline {
             }
         }
 
+
         // =========================================================
         // 5. DEPLOY
         // =========================================================
@@ -98,9 +102,11 @@ pipeline {
 
                     bat "\"${docker}\" build -t evat-backend:${BUILD_NUMBER} server/node-api"
 
+
                     echo 'Removing previous staging container if it exists...'
 
                     bat "\"${docker}\" rm -f evat-backend-staging || exit /b 0"
+
 
                     echo 'Deploying EVAT backend container...'
 
@@ -121,13 +127,16 @@ pipeline {
                         evat-backend:${BUILD_NUMBER}
                     """
 
+
                     echo 'Waiting for Docker application to start...'
 
                     bat 'powershell -NoProfile -Command "Start-Sleep -Seconds 15"'
 
+
                     echo 'Checking deployed container...'
 
                     bat "\"${docker}\" ps --filter name=evat-backend-staging"
+
 
                     echo 'Checking Docker container health...'
 
@@ -135,11 +144,13 @@ pipeline {
                         powershell -NoProfile -Command "\$health=(& '${docker}' inspect --format='{{.State.Health.Status}}' evat-backend-staging); Write-Host ('Docker Health: ' + \$health); if (\$health -eq 'unhealthy') { exit 1 }"
                     """
 
+
                     echo 'Verifying deployed EVAT API...'
 
                     bat '''
                         powershell -NoProfile -Command "$response=Invoke-WebRequest -Uri 'http://localhost:8082/api/docs/' -UseBasicParsing; Write-Host ('HTTP Status: ' + $response.StatusCode); if ($response.StatusCode -ne 200) { exit 1 }"
                     '''
+
 
                     echo 'EVAT deployment completed successfully.'
                 }
@@ -157,6 +168,7 @@ pipeline {
                     echo 'Staging deployment completed successfully.'
                 }
 
+
                 failure {
                     echo '=========================================='
                     echo 'DEPLOYMENT FAILED'
@@ -167,9 +179,11 @@ pipeline {
 
                         def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
+
                         echo 'Removing failed staging container...'
 
                         bat "\"${docker}\" rm -f evat-backend-staging || exit /b 0"
+
 
                         echo 'Starting rollback using known-good image evat-backend:1.1...'
 
@@ -186,11 +200,13 @@ pipeline {
                             evat-backend:1.1
                         """
 
+
                         echo 'Rollback attempted using known-good evat-backend:1.1.'
                     }
                 }
             }
         }
+
 
         // =========================================================
         // 6. RELEASE
@@ -202,20 +218,24 @@ pipeline {
 
                     def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
+
                     echo '=========================================='
                     echo 'CREATING VERSIONED EVAT RELEASE'
                     echo '=========================================='
 
+
                     // Promote the exact Docker image that passed staging.
                     bat "\"${docker}\" tag evat-backend:${BUILD_NUMBER} evat-backend:release-${BUILD_NUMBER}"
 
+
                     echo "Release image created: evat-backend:release-${BUILD_NUMBER}"
+
 
                     // Capture Git commit.
                     bat 'git rev-parse HEAD > release-commit.txt'
 
-                    // Create simple release metadata without PowerShell
-                    // here-strings, avoiding Windows batch escaping issues.
+
+                    // Create release metadata.
                     bat 'echo EVAT RELEASE METADATA> release-metadata.txt'
                     bat 'echo Application: EVAT>> release-metadata.txt'
                     bat 'echo Jenkins Build: %BUILD_NUMBER%>> release-metadata.txt'
@@ -224,11 +244,14 @@ pipeline {
                     bat 'type release-commit.txt >> release-metadata.txt'
                     bat 'echo Release Status: SUCCESS>> release-metadata.txt'
 
+
                     echo 'Release metadata generated successfully.'
+
 
                     echo 'Release image verification...'
 
                     bat "\"${docker}\" image inspect evat-backend:release-${BUILD_NUMBER}"
+
 
                     echo '=========================================='
                     echo "RELEASE SUCCESSFUL: evat-backend:release-${BUILD_NUMBER}"
@@ -237,6 +260,7 @@ pipeline {
             }
 
             post {
+
                 success {
 
                     echo 'Archiving release metadata...'
@@ -247,13 +271,18 @@ pipeline {
                     echo 'Versioned release artefact archived successfully.'
                 }
 
+
                 failure {
+
                     echo '=========================================='
+
                     echo 'RELEASE FAILED'
+
                     echo '=========================================='
                 }
             }
         }
+
 
         // =========================================================
         // 7. MONITORING
@@ -267,27 +296,57 @@ pipeline {
                     echo 'EVAT MONITORING CHECK'
                     echo '=========================================='
 
+
                     // -------------------------------------------------
                     // 7.1 Check cAdvisor availability through Prometheus
                     // -------------------------------------------------
                     echo 'Checking Prometheus cAdvisor target...'
 
-                    def healthResponse = bat(
-                        returnStdout: true,
-                        script: '@curl.exe -s "http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22cadvisor%22%7D"'
-                    ).trim()
+                    def cadvisorHealthy = false
 
-                    echo 'Prometheus health response:'
-                    echo healthResponse
 
-                    if (!healthResponse.contains('"status":"success"') ||
-                        !healthResponse.contains('"value"') ||
-                        !healthResponse.contains('"1"')) {
+                    for (int attempt = 1; attempt <= 6; attempt++) {
 
-                        error 'MONITORING FAILED: cAdvisor target is not UP in Prometheus.'
+                        echo "cAdvisor monitoring check - attempt ${attempt}/6"
+
+
+                        def healthResponse = bat(
+                            returnStdout: true,
+                            script: '@curl.exe -s "http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22cadvisor%22%7D"'
+                        ).trim()
+
+
+                        echo 'Prometheus cAdvisor response:'
+
+                        echo healthResponse
+
+
+                        if (healthResponse.contains('"status":"success"') &&
+                            healthResponse.contains('"value"') &&
+                            healthResponse.contains('"1"')) {
+
+                            cadvisorHealthy = true
+
+                            echo 'cAdvisor monitoring target: UP'
+
+                            break
+                        }
+
+
+                        if (attempt < 6) {
+
+                            echo 'cAdvisor metric not ready yet. Waiting 5 seconds...'
+
+                            bat 'powershell -NoProfile -Command "Start-Sleep -Seconds 5"'
+                        }
                     }
 
-                    echo 'cAdvisor monitoring target: UP'
+
+                    if (!cadvisorHealthy) {
+
+                        error 'MONITORING FAILED: cAdvisor target did not become UP in Prometheus.'
+                    }
+
 
 
                     // -------------------------------------------------
@@ -295,21 +354,50 @@ pipeline {
                     // -------------------------------------------------
                     echo 'Checking EVAT staging CPU metric...'
 
-                    def cpuResponse = bat(
-                        returnStdout: true,
-                        script: '@curl.exe -s "http://127.0.0.1:9090/api/v1/query?query=container_cpu_usage_seconds_total%7Bname%3D%22evat-backend-staging%22%7D"'
-                    ).trim()
+                    def cpuAvailable = false
 
-                    echo 'EVAT CPU monitoring response:'
-                    echo cpuResponse
 
-                    if (!cpuResponse.contains('"status":"success"') ||
-                        !cpuResponse.contains('evat-backend-staging')) {
+                    for (int attempt = 1; attempt <= 6; attempt++) {
 
-                        error 'MONITORING FAILED: EVAT staging CPU metric not found.'
+                        echo "EVAT CPU monitoring check - attempt ${attempt}/6"
+
+
+                        def cpuResponse = bat(
+                            returnStdout: true,
+                            script: '@curl.exe -s "http://127.0.0.1:9090/api/v1/query?query=container_cpu_usage_seconds_total%7Bname%3D%22evat-backend-staging%22%7D"'
+                        ).trim()
+
+
+                        echo 'EVAT CPU monitoring response:'
+
+                        echo cpuResponse
+
+
+                        if (cpuResponse.contains('"status":"success"') &&
+                            cpuResponse.contains('evat-backend-staging')) {
+
+                            cpuAvailable = true
+
+                            echo 'EVAT CPU metric: AVAILABLE'
+
+                            break
+                        }
+
+
+                        if (attempt < 6) {
+
+                            echo 'EVAT CPU metric not ready yet. Waiting 5 seconds...'
+
+                            bat 'powershell -NoProfile -Command "Start-Sleep -Seconds 5"'
+                        }
                     }
 
-                    echo 'EVAT CPU metric: AVAILABLE'
+
+                    if (!cpuAvailable) {
+
+                        error 'MONITORING FAILED: EVAT staging CPU metric was not available.'
+                    }
+
 
 
                     // -------------------------------------------------
@@ -317,45 +405,88 @@ pipeline {
                     // -------------------------------------------------
                     echo 'Checking EVAT staging memory metric...'
 
-                    def memoryResponse = bat(
-                        returnStdout: true,
-                        script: '@curl.exe -s "http://127.0.0.1:9090/api/v1/query?query=container_memory_usage_bytes%7Bname%3D%22evat-backend-staging%22%7D"'
-                    ).trim()
+                    def memoryAvailable = false
 
-                    echo 'EVAT memory monitoring response:'
-                    echo memoryResponse
 
-                    if (!memoryResponse.contains('"status":"success"') ||
-                        !memoryResponse.contains('evat-backend-staging')) {
+                    for (int attempt = 1; attempt <= 6; attempt++) {
 
-                        error 'MONITORING FAILED: EVAT staging memory metric not found.'
+                        echo "EVAT memory monitoring check - attempt ${attempt}/6"
+
+
+                        def memoryResponse = bat(
+                            returnStdout: true,
+                            script: '@curl.exe -s "http://127.0.0.1:9090/api/v1/query?query=container_memory_usage_bytes%7Bname%3D%22evat-backend-staging%22%7D"'
+                        ).trim()
+
+
+                        echo 'EVAT memory monitoring response:'
+
+                        echo memoryResponse
+
+
+                        if (memoryResponse.contains('"status":"success"') &&
+                            memoryResponse.contains('evat-backend-staging')) {
+
+                            memoryAvailable = true
+
+                            echo 'EVAT memory metric: AVAILABLE'
+
+                            break
+                        }
+
+
+                        if (attempt < 6) {
+
+                            echo 'EVAT memory metric not ready yet. Waiting 5 seconds...'
+
+                            bat 'powershell -NoProfile -Command "Start-Sleep -Seconds 5"'
+                        }
                     }
 
-                    echo 'EVAT memory metric: AVAILABLE'
+
+                    if (!memoryAvailable) {
+
+                        error 'MONITORING FAILED: EVAT staging memory metric was not available.'
+                    }
+
 
 
                     // -------------------------------------------------
                     // 7.4 Final monitoring result
                     // -------------------------------------------------
                     echo '=========================================='
+
                     echo 'MONITORING CHECK PASSED'
+
                     echo '=========================================='
+
                     echo 'Prometheus target: UP'
+
                     echo 'EVAT CPU metric: AVAILABLE'
+
                     echo 'EVAT memory metric: AVAILABLE'
+
+                    echo 'Monitoring verification completed successfully.'
+
                     echo '=========================================='
                 }
             }
 
+
             post {
 
                 success {
+
                     echo 'Monitoring verification completed successfully.'
                 }
 
+
                 failure {
+
                     echo '=========================================='
+
                     echo 'MONITORING FAILED'
+
                     echo '=========================================='
                 }
             }
