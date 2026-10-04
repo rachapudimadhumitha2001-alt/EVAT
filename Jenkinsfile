@@ -274,7 +274,7 @@ pipeline {
 
                     def healthResponse = bat(
                         returnStdout: true,
-                        script: '@curl.exe -s "http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22cadvisor%22%7D"'
+                        script: '@curl.exe -s "http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22cadvisor%22%7D"'
                     ).trim()
 
                     echo 'Prometheus health response:'
@@ -297,7 +297,7 @@ pipeline {
 
                     def cpuResponse = bat(
                         returnStdout: true,
-                        script: '@curl.exe -s "http://localhost:9090/api/v1/query?query=container_cpu_usage_seconds_total%7Bname%3D%22evat-backend-staging%22%7D"'
+                        script: '@curl.exe -s "http://127.0.0.1:9090/api/v1/query?query=container_cpu_usage_seconds_total%7Bname%3D%22evat-backend-staging%22%7D"'
                     ).trim()
 
                     echo 'EVAT CPU monitoring response:'
@@ -319,7 +319,7 @@ pipeline {
 
                     def memoryResponse = bat(
                         returnStdout: true,
-                        script: '@curl.exe -s "http://localhost:9090/api/v1/query?query=container_memory_usage_bytes%7Bname%3D%22evat-backend-staging%22%7D"'
+                        script: '@curl.exe -s "http://127.0.0.1:9090/api/v1/query?query=container_memory_usage_bytes%7Bname%3D%22evat-backend-staging%22%7D"'
                     ).trim()
 
                     echo 'EVAT memory monitoring response:'
