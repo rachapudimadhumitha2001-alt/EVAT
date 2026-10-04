@@ -3,35 +3,43 @@ pipeline {
 
     stages {
 
-        // ============================================================
+        // =========================================================
         // 1. BUILD
-        // ============================================================
+        // =========================================================
         stage('Build') {
             steps {
                 echo 'Building EVAT application...'
 
                 bat 'npm ci'
+
+                echo 'Building React frontend...'
                 bat 'npm run build:client'
+
+                echo 'Building Node.js/TypeScript backend...'
                 bat 'npm run build:server'
+
+                echo 'Build stage completed successfully.'
             }
         }
 
 
-        // ============================================================
+        // =========================================================
         // 2. TEST
-        // ============================================================
+        // =========================================================
         stage('Test') {
             steps {
                 echo 'Running EVAT automated tests...'
 
                 bat 'npm run test:server -- --runInBand'
+
+                echo 'Test stage completed successfully.'
             }
         }
 
 
-        // ============================================================
+        // =========================================================
         // 3. CODE QUALITY
-        // ============================================================
+        // =========================================================
         stage('Code Quality') {
             steps {
                 echo 'Running SonarQube code quality analysis...'
@@ -43,26 +51,43 @@ pipeline {
                         bat "\"${scannerHome}\\bin\\sonar-scanner.bat\""
                     }
                 }
+
+                echo 'Code quality analysis completed successfully.'
             }
         }
 
 
-        // ============================================================
+        // =========================================================
         // 4. SECURITY
-        // ============================================================
+        // =========================================================
         stage('Security') {
             steps {
                 echo 'Running npm dependency security audit...'
 
+                /*
+                 * Generate a complete JSON security report.
+                 *
+                 * The || exit /b 0 allows the report to be archived
+                 * even when npm audit finds vulnerabilities.
+                 */
                 bat 'npm.cmd audit --json > npm-audit-report.json || exit /b 0'
 
                 echo 'Checking for critical vulnerabilities...'
 
+                /*
+                 * Critical vulnerabilities fail the pipeline.
+                 * Lower severity vulnerabilities are reported but do
+                 * not currently block deployment.
+                 */
                 bat 'npm.cmd audit --audit-level=critical'
+
+                echo 'Security stage completed successfully.'
             }
 
             post {
                 always {
+                    echo 'Archiving npm security audit report...'
+
                     archiveArtifacts artifacts: 'npm-audit-report.json',
                                      allowEmptyArchive: true
                 }
@@ -70,9 +95,9 @@ pipeline {
         }
 
 
-        // ============================================================
+        // =========================================================
         // 5. DEPLOY
-        // ============================================================
+        // =========================================================
         stage('Deploy') {
 
             environment {
@@ -80,20 +105,47 @@ pipeline {
             }
 
             steps {
+
                 script {
 
+                    /*
+                     * Jenkins running as a Windows service does not
+                     * reliably inherit Docker Desktop's PATH.
+                     *
+                     * Therefore we explicitly use the Docker executable.
+                     */
                     def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
-                    echo 'Building Docker image...'
+
+                    // -------------------------------------------------
+                    // Build Docker image
+                    // -------------------------------------------------
+                    echo 'Building EVAT Docker image...'
 
                     bat "\"${docker}\" build -t evat-backend:${BUILD_NUMBER} server/node-api"
 
 
+                    // -------------------------------------------------
+                    // Remove old staging container
+                    // -------------------------------------------------
                     echo 'Removing previous staging container if it exists...'
 
-                    bat "\"${docker}\" rm -f evat-backend-staging 2>NUL || exit /b 0"
+                    /*
+                     * Do not use 2>NUL here.
+                     *
+                     * Jenkins on Windows was producing:
+                     *
+                     * ERROR: Input redirection is not supported
+                     *
+                     * The command is allowed to fail if the container
+                     * does not exist.
+                     */
+                    bat "\"${docker}\" rm -f evat-backend-staging || exit /b 0"
 
 
+                    // -------------------------------------------------
+                    // Start new staging container
+                    // -------------------------------------------------
                     echo 'Deploying EVAT backend container...'
 
                     bat """
@@ -114,23 +166,40 @@ pipeline {
                     """
 
 
-                    echo 'Waiting for Docker health check...'
+                    // -------------------------------------------------
+                    // Wait for application startup
+                    // -------------------------------------------------
+                    echo 'Waiting for Docker application to start...'
 
-                    bat 'timeout /t 10 /nobreak'
+                    /*
+                     * PowerShell Start-Sleep is more reliable than
+                     * Windows timeout when Jenkins is running as a
+                     * non-interactive service.
+                     */
+                    bat 'powershell -NoProfile -Command "Start-Sleep -Seconds 15"'
 
 
+                    // -------------------------------------------------
+                    // Check container is running
+                    // -------------------------------------------------
                     echo 'Checking deployed container...'
 
                     bat "\"${docker}\" ps --filter name=evat-backend-staging"
 
 
+                    // -------------------------------------------------
+                    // Check Docker health status
+                    // -------------------------------------------------
                     echo 'Checking Docker container health...'
 
                     bat """
-                        powershell -NoProfile -Command "\$health=(docker inspect --format='{{.State.Health.Status}}' evat-backend-staging); Write-Host ('Docker Health: ' + \$health); if (\$health -eq 'unhealthy') { exit 1 }"
+                        powershell -NoProfile -Command "\$health=(& '${docker}' inspect --format='{{.State.Health.Status}}' evat-backend-staging); Write-Host ('Docker Health: ' + \$health); if (\$health -eq 'unhealthy') { exit 1 }"
                     """
 
 
+                    // -------------------------------------------------
+                    // Verify API endpoint
+                    // -------------------------------------------------
                     echo 'Verifying deployed EVAT API...'
 
                     bat '''
@@ -138,29 +207,64 @@ pipeline {
                     '''
 
 
+                    // -------------------------------------------------
+                    // Deployment completed
+                    // -------------------------------------------------
                     echo 'EVAT deployment completed successfully.'
                 }
             }
 
+
+            // =========================================================
+            // DEPLOY POST ACTIONS
+            // =========================================================
             post {
 
-                // --------------------------------------------------------
-                // Rollback
-                // --------------------------------------------------------
+                // -----------------------------------------------------
+                // Deployment SUCCESS
+                // -----------------------------------------------------
+                success {
+
+                    echo '=========================================='
+                    echo 'DEPLOYMENT SUCCESSFUL'
+                    echo '=========================================='
+
+                    echo 'Docker container is running.'
+                    echo 'Docker health check passed.'
+                    echo 'EVAT API endpoint verification passed.'
+                    echo 'Staging deployment completed successfully.'
+                }
+
+
+                // -----------------------------------------------------
+                // Deployment FAILURE
+                // -----------------------------------------------------
                 failure {
 
-                    echo 'Deployment failed. Attempting rollback...'
+                    echo '=========================================='
+                    echo 'DEPLOYMENT FAILED'
+                    echo 'ATTEMPTING ROLLBACK'
+                    echo '=========================================='
 
                     script {
 
                         def docker = 'C:\\Users\\racha\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
 
 
+                        // -------------------------------------------------
+                        // Remove failed staging container
+                        // -------------------------------------------------
                         echo 'Removing failed staging container...'
 
-                        bat "\"${docker}\" rm -f evat-backend-staging 2>NUL || exit /b 0"
+                        /*
+                         * No 2>NUL redirection.
+                         */
+                        bat "\"${docker}\" rm -f evat-backend-staging || exit /b 0"
 
 
+                        // -------------------------------------------------
+                        // Rollback
+                        // -------------------------------------------------
                         echo 'Starting rollback using known-good image evat-backend:1.1...'
 
                         bat """
@@ -176,18 +280,8 @@ pipeline {
                             evat-backend:1.1
                         """
 
-
                         echo 'Rollback attempted using known-good evat-backend:1.1.'
                     }
-                }
-
-
-                // --------------------------------------------------------
-                // Successful deployment
-                // --------------------------------------------------------
-                success {
-
-                    echo 'Deployment and health checks passed.'
                 }
             }
         }
