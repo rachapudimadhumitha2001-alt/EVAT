@@ -258,6 +258,107 @@ pipeline {
         // =========================================================
         // 7. MONITORING
         // =========================================================
-        // Monitoring will be added after Release is verified.
+        stage('Monitoring') {
+
+            steps {
+                script {
+
+                    echo '=========================================='
+                    echo 'EVAT MONITORING CHECK'
+                    echo '=========================================='
+
+                    // -------------------------------------------------
+                    // 7.1 Check cAdvisor availability through Prometheus
+                    // -------------------------------------------------
+                    echo 'Checking Prometheus cAdvisor target...'
+
+                    def healthResponse = bat(
+                        returnStdout: true,
+                        script: '@curl.exe -s "http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22cadvisor%22%7D"'
+                    ).trim()
+
+                    echo 'Prometheus health response:'
+                    echo healthResponse
+
+                    if (!healthResponse.contains('"status":"success"') ||
+                        !healthResponse.contains('"value"') ||
+                        !healthResponse.contains('"1"')) {
+
+                        error 'MONITORING FAILED: cAdvisor target is not UP in Prometheus.'
+                    }
+
+                    echo 'cAdvisor monitoring target: UP'
+
+
+                    // -------------------------------------------------
+                    // 7.2 Check EVAT staging CPU metric
+                    // -------------------------------------------------
+                    echo 'Checking EVAT staging CPU metric...'
+
+                    def cpuResponse = bat(
+                        returnStdout: true,
+                        script: '@curl.exe -s "http://localhost:9090/api/v1/query?query=container_cpu_usage_seconds_total%7Bname%3D%22evat-backend-staging%22%7D"'
+                    ).trim()
+
+                    echo 'EVAT CPU monitoring response:'
+                    echo cpuResponse
+
+                    if (!cpuResponse.contains('"status":"success"') ||
+                        !cpuResponse.contains('evat-backend-staging')) {
+
+                        error 'MONITORING FAILED: EVAT staging CPU metric not found.'
+                    }
+
+                    echo 'EVAT CPU metric: AVAILABLE'
+
+
+                    // -------------------------------------------------
+                    // 7.3 Check EVAT staging memory metric
+                    // -------------------------------------------------
+                    echo 'Checking EVAT staging memory metric...'
+
+                    def memoryResponse = bat(
+                        returnStdout: true,
+                        script: '@curl.exe -s "http://localhost:9090/api/v1/query?query=container_memory_usage_bytes%7Bname%3D%22evat-backend-staging%22%7D"'
+                    ).trim()
+
+                    echo 'EVAT memory monitoring response:'
+                    echo memoryResponse
+
+                    if (!memoryResponse.contains('"status":"success"') ||
+                        !memoryResponse.contains('evat-backend-staging')) {
+
+                        error 'MONITORING FAILED: EVAT staging memory metric not found.'
+                    }
+
+                    echo 'EVAT memory metric: AVAILABLE'
+
+
+                    // -------------------------------------------------
+                    // 7.4 Final monitoring result
+                    // -------------------------------------------------
+                    echo '=========================================='
+                    echo 'MONITORING CHECK PASSED'
+                    echo '=========================================='
+                    echo 'Prometheus target: UP'
+                    echo 'EVAT CPU metric: AVAILABLE'
+                    echo 'EVAT memory metric: AVAILABLE'
+                    echo '=========================================='
+                }
+            }
+
+            post {
+
+                success {
+                    echo 'Monitoring verification completed successfully.'
+                }
+
+                failure {
+                    echo '=========================================='
+                    echo 'MONITORING FAILED'
+                    echo '=========================================='
+                }
+            }
+        }
     }
 }
